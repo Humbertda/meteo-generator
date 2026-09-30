@@ -2,7 +2,6 @@ use serde::Deserialize;
 use std::env;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
-use std::process;
 
 #[derive(Deserialize, Debug)]
 struct BanResponse {
@@ -53,6 +52,13 @@ fn wmo_to_emoji_and_str(code: u8) -> (&'static str, &'static str) {
     }
 }
 
+/// Échappe les caractères spéciaux requis par le format iCalendar (RFC 5545)
+fn escape_ical(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace(';', "\\;")
+        .replace(',', "\\,")
+}
+
 async fn geocode_address(client: &reqwest::Client, query: &str) -> Option<(String, f64, f64)> {
     let url = "https://api-adresse.data.gouv.fr/search/";
     let resp = client
@@ -90,14 +96,8 @@ async fn fetch_forecast(client: &reqwest::Client, lat: f64, lon: f64) -> Option<
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Vérification stricte de la variable d'environnement
-    let locations_raw = match env::var("WEATHER_LOCATIONS") {
-        Ok(val) if !val.trim().is_empty() => val,
-        _ => {
-            eprintln!("Erreur : La variable WEATHER_LOCATIONS n'est pas renseignée ou est vide.");
-            process::exit(1);
-        }
-    };
+    let locations_raw = env::var("WEATHER_LOCATIONS")
+        .map_err(|_| "La variable d'environnement WEATHER_LOCATIONS n'est pas définie.")?;
 
     let address_queries: Vec<&str> = locations_raw
         .split(';')
@@ -106,11 +106,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     if address_queries.is_empty() {
-        eprintln!("Erreur : Aucune adresse valide trouvée dans WEATHER_LOCATIONS.");
-        process::exit(1);
+        return Err("Aucune adresse valide trouvée dans WEATHER_LOCATIONS.".into());
     }
 
-    let client = reqwest::Client::new();
+    // Ajout d'un User-Agent personnalisé pour respecter les API publiques
+    let client = reqwest::Client::builder()
+        .user_agent("weather_calendar/1.0")
+        .build()?;
+
     let mut ics_content = String::from(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
@@ -132,23 +135,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let date_str = &daily.time[i];
                     let date_clean = date_str.replace('-', "");
 
-                    let temp_max = daily.temperature_2m_max[i];
-                    let temp_min = daily.temperature_2m_min[i];
-                    let rain_prob = daily.precipitation_probability_max[i].unwrap_or(0);
-                    let (emoji, condition) = wmo_to_emoji_and_str(daily.weather_code[i]);
+                    let temp_max = daily.temperature_2m_max.get(i).copied().unwrap_or(0.0);
+                    let temp_min = daily.temperature_2m_min.get(i).copied().unwrap_or(0.0);
+                    let rain_prob = daily
+                        .precipitation_probability_max
+                        .get(i)
+                        .and_then(|&opt| opt)
+                        .unwrap_or(0);
+                    let weather_code = daily.weather_code.get(i).copied().unwrap_or(0);
+                    let (emoji, condition) = wmo_to_emoji_and_str(weather_code);
 
-                    let summary = format!(
-                        "{emoji} {formatted_address} : {:.0}°C / {:.0}°C - {condition}",
-                        temp_min, temp_max
-                    );
-                    let description = format!(
+                    let escaped_addr = escape_ical(&formatted_address);
+
+                    let summary = escape_ical(&format!(
+                        "{emoji} {formatted_address} : {temp_min:.0}°C / {temp_max:.0}°C - {condition}"
+                    ));
+
+                    // Correction de la chaîne formatée avec interpolation directe
+                    let description = escape_ical(&format!(
                         "Météo-France AROME (Maillage 1.3km)\\n\
                          Adresse: {formatted_address}\\n\
-                         - Température Min: {:.1}°C\\n\
-                         - Température Max: {:.1}°C\\n\
+                         - Température Min: {temp_min:.1}°C\\n\
+                         - Température Max: {temp_max:.1}°C\\n\
                          - Risque de pluie: {rain_prob}%\\n\
                          - Condition: {condition}"
-                    );
+                    ));
 
                     let addr_slug: String = formatted_address
                         .to_lowercase()
@@ -163,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                          DTSTART;VALUE=DATE:{date_clean}\r\n\
                          SUMMARY:{summary}\r\n\
                          DESCRIPTION:{description}\r\n\
-                         LOCATION:{formatted_address}\r\n\
+                         LOCATION:{escaped_addr}\r\n\
                          STATUS:CONFIRMED\r\n\
                          END:VEVENT\r\n"
                     ));
