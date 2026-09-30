@@ -24,12 +24,12 @@ struct BanProperties {
     label: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct OpenMeteoResponse {
     daily: DailyData,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct DailyData {
     time: Vec<String>,
     temperature_2m_max: Vec<f64>,
@@ -52,7 +52,6 @@ fn wmo_to_emoji_and_str(code: u8) -> (&'static str, &'static str) {
     }
 }
 
-/// Échappe les caractères spéciaux requis par le format iCalendar (RFC 5545)
 fn escape_ical(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace(';', "\\;")
@@ -61,36 +60,66 @@ fn escape_ical(text: &str) -> String {
 
 async fn geocode_address(client: &reqwest::Client, query: &str) -> Option<(String, f64, f64)> {
     let url = "https://api-adresse.data.gouv.fr/search/";
-    let resp = client
+    let resp = match client
         .get(url)
         .query(&[("q", query), ("limit", "1")])
         .send()
         .await
-        .ok()?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Erreur réseau lors du géocodage de '{query}': {e}");
+            return None;
+        }
+    };
 
-    if resp.status().is_success() {
-        let ban_resp = resp.json::<BanResponse>().await.ok()?;
-        let feature = ban_resp.features.into_iter().next()?;
-        let lon = feature.geometry.coordinates[0];
-        let lat = feature.geometry.coordinates[1];
-        let label = feature.properties.label;
-        Some((label, lat, lon))
-    } else {
-        None
+    if !resp.status().is_success() {
+        eprintln!("Erreur HTTP BAN ({}) pour '{query}'", resp.status());
+        return None;
+    }
+
+    match resp.json::<BanResponse>().await {
+        Ok(ban_resp) => {
+            let feature = ban_resp.features.into_iter().next()?;
+            let lon = feature.geometry.coordinates[0];
+            let lat = feature.geometry.coordinates[1];
+            let label = feature.properties.label;
+            Some((label, lat, lon))
+        }
+        Err(e) => {
+            eprintln!("Erreur de désérialisation JSON BAN pour '{query}': {e}");
+            None
+        }
     }
 }
 
 async fn fetch_forecast(client: &reqwest::Client, lat: f64, lon: f64) -> Option<DailyData> {
+    // Utilisation des données par défaut d'Open-Meteo pour garantir 5 jours de prévisions
     let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&models=meteofrance_arome_france&forecast_days=5&timezone=Europe%2FParis"
+        "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=5&timezone=Europe%2FParis"
     );
 
-    let resp = client.get(&url).send().await.ok()?;
-    if resp.status().is_success() {
-        let data = resp.json::<OpenMeteoResponse>().await.ok()?;
-        Some(data.daily)
-    } else {
-        None
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Erreur réseau lors de la récupération météo: {e}");
+            return None;
+        }
+    };
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        eprintln!("Erreur HTTP Open-Meteo ({status}): {text}");
+        return None;
+    }
+
+    match resp.json::<OpenMeteoResponse>().await {
+        Ok(data) => Some(data.daily),
+        Err(e) => {
+            eprintln!("Erreur de désérialisation JSON Open-Meteo: {e}");
+            None
+        }
     }
 }
 
@@ -109,7 +138,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Aucune adresse valide trouvée dans WEATHER_LOCATIONS.".into());
     }
 
-    // Ajout d'un User-Agent personnalisé pour respecter les API publiques
     let client = reqwest::Client::builder()
         .user_agent("weather_calendar/1.0")
         .build()?;
@@ -117,9 +145,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ics_content = String::from(
         "BEGIN:VCALENDAR\r\n\
          VERSION:2.0\r\n\
-         PRODID:-//Meteo AROME Address Calendar//FR\r\n\
+         PRODID:-//Meteo Address Calendar//FR\r\n\
          CALSCALE:GREGORIAN\r\n\
-         X-WR-CALNAME:Météo AROME (5 jours)\r\n\
+         X-WR-CALNAME:Météo (5 jours)\r\n\
          X-WR-TIMEZONE:Europe/Paris\r\n",
     );
 
@@ -151,9 +179,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "{emoji} {formatted_address} : {temp_min:.0}°C / {temp_max:.0}°C - {condition}"
                     ));
 
-                    // Correction de la chaîne formatée avec interpolation directe
                     let description = escape_ical(&format!(
-                        "Météo-France AROME (Maillage 1.3km)\\n\
+                        "Météo (5 jours)\\n\
                          Adresse: {formatted_address}\\n\
                          - Température Min: {temp_min:.1}°C\\n\
                          - Température Max: {temp_max:.1}°C\\n\
@@ -169,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     ics_content.push_str(&format!(
                         "BEGIN:VEVENT\r\n\
-                         UID:weather-{addr_slug}-{date_clean}@meteo-arome\r\n\
+                         UID:weather-{addr_slug}-{date_clean}@meteo-app\r\n\
                          DTSTAMP:20260101T000000Z\r\n\
                          DTSTART;VALUE=DATE:{date_clean}\r\n\
                          SUMMARY:{summary}\r\n\
