@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::env;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
+use chrono::Utc;
 
 #[derive(Deserialize, Debug)]
 struct BanResponse {
