@@ -249,10 +249,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|c| if c.is_alphanumeric() { c } else { '-' })
                         .collect();
 
+                    let dtstamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
                     ics_content.push_str(&format!(
-                        "BEGIN:VEVENT\r\n\
+                       "BEGIN:VEVENT\r\n\
                          UID:weather-{addr_slug}-{date_clean}@meteo-app\r\n\
-                         DTSTAMP:20260101T000000Z\r\n\
+                         DTSTAMP:{dtstamp}\r\n\
                          DTSTART;VALUE=DATE:{date_clean}\r\n\
                          SUMMARY:{summary}\r\n\
                          DESCRIPTION:{description}\r\n\
