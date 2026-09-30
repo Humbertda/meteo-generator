@@ -229,7 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let escaped_addr = escape_ical(&formatted_address);
 
                     let summary = escape_ical(&format!(
-                        "{emoji} {formatted_address} : {temp_min:.0}°C / {temp_max:.0}°C - {condition}"
+                        "{emoji} {temp_min:.0}°C / {temp_max:.0}°C - {condition} - {formatted_address}"
                     ));
 
                     let description = escape_ical(&format!(
