@@ -71,6 +71,8 @@ fn escape_ical(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace(';', "\\;")
         .replace(',', "\\,")
+        .replace("\r\n", "\\n")
+        .replace('\n', "\\n")
 }
 
 async fn geocode_address(client: &reqwest::Client, query: &str) -> Option<(String, f64, f64)> {
@@ -234,15 +236,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ));
 
                     let description = escape_ical(&format!(
-                        "Météo (5 jours)\\n\
-                         Adresse: {formatted_address}\\n\
-                         - Température Min: {temp_min:.1}°C\\n\
-                         - Température Max: {temp_max:.1}°C\\n\
-                         - Risque max pluie: {rain_prob}%\\n\
-                         - Condition: {condition}\\n\\n\
-                         Détail horaire :\\n\
-                         {hourly_text}"
-                    ));
+    "Météo (5 jours)\n\
+     Adresse: {formatted_address}\n\
+     - Température Min: {temp_min:.1}°C\n\
+     - Température Max: {temp_max:.1}°C\n\
+     - Risque max pluie: {rain_prob}%\n\
+     - Condition: {condition}\n\n\
+     Détail horaire :\n\
+     {hourly_text}"
+));
+
 
                     let addr_slug: String = formatted_address
                         .to_lowercase()
