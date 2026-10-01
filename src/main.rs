@@ -228,7 +228,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
 
-                    let hourly_text = hourly_lines.join("\\n");
+                    let hourly_text = hourly_lines.join("\n");
                     let escaped_addr = escape_ical(&formatted_address);
 
                     let summary = escape_ical(&format!(
